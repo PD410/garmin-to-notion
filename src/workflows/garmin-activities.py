@@ -45,7 +45,8 @@ def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[s
         "Indoor Rowing": "Rowing",
         "Speed Walking": "Walking",
         "Strength Training": "Strength",
-        "Treadmill Running": "Running"
+        "Treadmill Running": "Running",
+        "Running": "Run"
     }
 
     if formatted_type == "Rowing V2":

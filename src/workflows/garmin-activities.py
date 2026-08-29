@@ -6,7 +6,6 @@ from notion_client import Client as NotionClient
 
 from src.helpers import get_garmin_client, get_notion_client
 
-# Your local time zone, replace with the appropriate one if needed
 local_tz = pytz.timezone('America/Toronto')
 
 ACTIVITY_ICONS = {
@@ -45,7 +44,7 @@ def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[s
         "Indoor Rowing": "Rowing",
         "Speed Walking": "Walking",
         "Strength Training": "Strength",
-        "Treadmill Running": "Running",
+        "Treadmill Running": "Run",
         "Running": "Run"
     }
 
@@ -70,6 +69,23 @@ def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[s
 
 def format_entertainment(activity_name: str) -> str:
     return activity_name.replace('ENTERTAINMENT', 'Netflix')
+
+def calculate_metrics(activity: dict) -> tuple[float, float, float]:
+    # Convert meters to miles and seconds to minutes
+    distance_miles = activity.get('distance', 0) / 1609.34
+    time_moving_mins = activity.get('movingDuration', activity.get('duration', 0)) / 60
+    
+    # Calculate pseudo-decimal pace (MM.SS) directly from Garmin's average speed
+    average_speed = activity.get('averageSpeed', 0)
+    if average_speed > 0:
+        decimal_pace = 1609.34 / (average_speed * 60)
+        pace_minutes = int(decimal_pace)
+        pace_seconds = (decimal_pace - pace_minutes) * 60
+        pace_per_mile = pace_minutes + (pace_seconds / 100)
+    else:
+        pace_per_mile = 0
+        
+    return distance_miles, time_moving_mins, pace_per_mile
 
 def activity_exists(
     notion_client: NotionClient,
@@ -104,17 +120,12 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
         activity_name
     )
 
-    # Unit conversions
-    distance_miles = new_activity.get('distance', 0) / 1609.34
-    time_moving_mins = new_activity.get('movingDuration', new_activity.get('duration', 0)) / 60
-    pace_per_mile = time_moving_mins / distance_miles if distance_miles > 0 else 0
+    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(new_activity)
 
-    # Safely pull existing values or default to None
     ex_dist = existing_props.get('Distance in Miles', {}).get('number')
     ex_time = existing_props.get('Time Moving', {}).get('number')
     ex_pace = existing_props.get('Pace Per Mile', {}).get('number')
     
-    # Safely extract select property
     type_prop = existing_props.get('Type', {})
     ex_type = type_prop.get('select', {}).get('name') if type_prop.get('select') else None
 
@@ -133,11 +144,7 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
         activity_name
     )
 
-    # Unit conversions
-    distance_miles = activity.get('distance', 0) / 1609.34
-    time_moving_mins = activity.get('movingDuration', activity.get('duration', 0)) / 60
-    pace_per_mile = time_moving_mins / distance_miles if distance_miles > 0 else 0
-
+    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(activity)
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {
@@ -166,11 +173,7 @@ def update_activity(notion_client: NotionClient, existing_activity: dict, new_ac
         activity_name
     )
 
-    # Unit conversions
-    distance_miles = new_activity.get('distance', 0) / 1609.34
-    time_moving_mins = new_activity.get('movingDuration', new_activity.get('duration', 0)) / 60
-    pace_per_mile = time_moving_mins / distance_miles if distance_miles > 0 else 0
-
+    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(new_activity)
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {

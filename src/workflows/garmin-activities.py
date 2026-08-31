@@ -1,4 +1,4 @@
-from datetime import datetime, UTC, timedelta
+from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
 from garminconnect import Garmin as GarminClient
@@ -6,7 +6,8 @@ from notion_client import Client as NotionClient
 
 from src.helpers import get_garmin_client, get_notion_client
 
-local_tz = pytz.timezone('America/Toronto')
+# Correct timezone for Pacific Time
+local_tz = pytz.timezone('America/Los_Angeles')
 
 ACTIVITY_ICONS = {
     "Barre": "https://img.icons8.com/?size=100&id=66924&format=png&color=000000",
@@ -75,10 +76,9 @@ def calculate_metrics(activity: dict) -> tuple[float, float, float]:
     distance_miles = activity.get('distance', 0) / 1609.34
     time_moving_mins = activity.get('movingDuration', activity.get('duration', 0)) / 60
     
-    # Calculate pseudo-decimal pace (MM.SS) directly from Garmin's average speed
-    average_speed = activity.get('averageSpeed', 0)
-    if average_speed > 0:
-        decimal_pace = 1609.34 / (average_speed * 60)
+    # Calculate pace perfectly as moving time divided by distance
+    if distance_miles > 0:
+        decimal_pace = time_moving_mins / distance_miles
         pace_minutes = int(decimal_pace)
         pace_seconds = (decimal_pace - pace_minutes) * 60
         pace_per_mile = pace_minutes + (pace_seconds / 100)
@@ -137,7 +137,7 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
     )
 
 def create_activity(notion_client: NotionClient, database_id: str, activity: dict) -> None:
-    activity_date = activity.get('startTimeGMT')
+    activity_date = activity.get('startTimeLocal') # Map local time to Notion date block
     activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
     activity_type, activity_subtype = format_activity_type(
         activity.get('activityType', {}).get('typeKey', 'Unknown'),
@@ -205,11 +205,11 @@ def main():
     activities = get_all_activities(garmin_client, garmin_configuration.activity_fetch_limit)
 
     for activity in activities:
-        activity_date_raw: str = activity.get('startTimeGMT')
+        activity_date_raw: str = activity.get('startTimeLocal') # Evaluate based on local timestamp
         activity_date: datetime = (
             datetime
             .strptime(activity_date_raw, '%Y-%m-%d %H:%M:%S')
-            .replace(tzinfo=UTC)
+            .replace(tzinfo=local_tz)
         )
 
         activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))

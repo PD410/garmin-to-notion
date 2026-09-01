@@ -73,19 +73,16 @@ def format_entertainment(activity_name: str) -> str:
 def calculate_metrics(activity: dict) -> tuple[float, float, float]:
     distance_miles = (activity.get('distance') or 0) / 1609.34
     
-    # Using raw elapsed duration to perfectly match Garmin's dashboard average pace
-    duration = activity.get('duration') or 0
-    time_moving_mins = duration / 60
+    duration_sec = activity.get('duration') or 0
+    time_moving_mins = duration_sec / 60
     
     if distance_miles > 0:
-        decimal_pace = time_moving_mins / distance_miles
-    else:
-        decimal_pace = 0
-        
-    if decimal_pace > 0:
-        pace_minutes = int(decimal_pace)
-        pace_seconds = (decimal_pace - pace_minutes) * 60
-        pace_per_mile = pace_minutes + (pace_seconds / 100)
+        # Calculate total seconds per mile and round to the nearest whole integer
+        # This completely prevents rounding errors like 8.596 becoming 8.60
+        seconds_per_mile = int(round(duration_sec / distance_miles))
+        pace_minutes = seconds_per_mile // 60
+        pace_seconds = seconds_per_mile % 60
+        pace_per_mile = pace_minutes + (pace_seconds / 100.0)
     else:
         pace_per_mile = 0
         
@@ -177,51 +174,55 @@ def create_activity(notion_client: NotionClient, garmin_client: GarminClient, da
     if icon_url:
         page["icon"] = {"type": "external", "external": {"url": icon_url}}
 
-    # Pull and construct mile splits for inside the page
-    splits_blocks = []
+    created_page = notion_client.pages.create(**page)
+    page_id = created_page['id']
+
     if activity_type == "Run" and activity_id:
         try:
             splits_data = garmin_client.get_activity_splits(activity_id)
             laps = splits_data.get('lapDTOs', []) if isinstance(splits_data, dict) else splits_data
             
             if laps:
-                splits_blocks.append({
-                    "object": "block",
-                    "type": "heading_3",
-                    "heading_3": {
-                        "rich_text": [{"type": "text", "text": {"content": "Mile Splits"}}]
-                    }
-                })
+                db_schema = {
+                    "parent": {"type": "page_id", "page_id": page_id},
+                    "title": [{"type": "text", "text": {"content": "Mile Splits"}}],
+                    "properties": {
+                        "Mile": {"title": {}},
+                        "Pace Per Mile": {"number": {}}
+                    },
+                    "is_inline": True
+                }
+                splits_db = notion_client.databases.create(**db_schema)
+                splits_db_id = splits_db['id']
                 
                 lap_num = 1
                 for lap in laps:
                     lap_dist_mi = lap.get('distance', 0) / 1609.34
-                    lap_time_min = lap.get('duration', 0) / 60
+                    
+                    if lap_dist_mi < 0.05:
+                        continue
+
+                    lap_time_sec = lap.get('duration', 0)
                     
                     if lap_dist_mi > 0:
-                        lap_pace = lap_time_min / lap_dist_mi
-                        pace_min = int(lap_pace)
-                        pace_sec = int((lap_pace - pace_min) * 60)
-                        pace_str = f"{pace_min}:{pace_sec:02d}"
+                        lap_seconds_per_mile = int(round(lap_time_sec / lap_dist_mi))
+                        pace_min = lap_seconds_per_mile // 60
+                        pace_sec = lap_seconds_per_mile % 60
+                        pace_decimal = pace_min + (pace_sec / 100.0)
                     else:
-                        pace_str = "0:00"
-                        
-                    text_content = f"Lap {lap_num} ({lap_dist_mi:.2f} mi): {pace_str}/mi"
+                        pace_decimal = 0.0
                     
-                    splits_blocks.append({
-                        "object": "block",
-                        "type": "bulleted_list_item",
-                        "bulleted_list_item": {
-                            "rich_text": [{"type": "text", "text": {"content": text_content}}]
+                    lap_row = {
+                        "parent": {"database_id": splits_db_id},
+                        "properties": {
+                            "Mile": {"title": [{"text": {"content": f"Mile {lap_num}"}}]},
+                            "Pace Per Mile": {"number": round(pace_decimal, 2)}
                         }
-                    })
+                    }
+                    notion_client.pages.create(**lap_row)
                     lap_num += 1
-                    
-                page["children"] = splits_blocks
         except Exception:
-            pass  # If Garmin fails to provide splits, continue creating the standard entry
-
-    notion_client.pages.create(**page)
+            pass
 
 def update_activity(notion_client: NotionClient, existing_activity: dict, new_activity: dict) -> None:
     activity_name = new_activity.get('activityName', 'Unnamed Activity')

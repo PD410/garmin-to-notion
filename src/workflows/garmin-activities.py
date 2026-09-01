@@ -6,7 +6,6 @@ from notion_client import Client as NotionClient
 
 from src.helpers import get_garmin_client, get_notion_client
 
-# Correct timezone for Pacific Time
 local_tz = pytz.timezone('America/Los_Angeles')
 
 ACTIVITY_ICONS = {
@@ -71,21 +70,19 @@ def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[s
 def format_entertainment(activity_name: str) -> str:
     return activity_name.replace('ENTERTAINMENT', 'Netflix')
 
-def calculate_metrics(activity: dict) -> tuple[float, float, float]:
-    # Convert meters to miles and seconds to minutes
-    distance_miles = activity.get('distance', 0) / 1609.34
-    time_moving_mins = activity.get('movingDuration', activity.get('duration', 0)) / 60
-    
-    # Calculate pace perfectly as moving time divided by distance
-    if distance_miles > 0:
-        decimal_pace = time_moving_mins / distance_miles
-        pace_minutes = int(decimal_pace)
-        pace_seconds = (decimal_pace - pace_minutes) * 60
-        pace_per_mile = pace_minutes + (pace_seconds / 100)
-    else:
-        pace_per_mile = 0
-        
-    return distance_miles, time_moving_mins, pace_per_mile
+def calculate_metrics(activity: dict) -> tuple[float, float]:
+    distance_miles = (activity.get('distance') or 0) / 1609.34
+    duration = activity.get('movingDuration') or activity.get('duration') or 0
+    time_moving_mins = duration / 60
+    return distance_miles, time_moving_mins
+
+def parse_local_date(activity: dict) -> str:
+    local_str = activity.get('startTimeLocal')
+    if not local_str:
+        return activity.get('startTimeGMT')
+    naive_dt = datetime.strptime(local_str, '%Y-%m-%d %H:%M:%S')
+    localized_dt = local_tz.localize(naive_dt)
+    return localized_dt.isoformat()
 
 def activity_exists(
     notion_client: NotionClient,
@@ -120,11 +117,10 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
         activity_name
     )
 
-    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(new_activity)
+    distance_miles, time_moving_mins = calculate_metrics(new_activity)
 
     ex_dist = existing_props.get('Distance in Miles', {}).get('number')
     ex_time = existing_props.get('Time Moving', {}).get('number')
-    ex_pace = existing_props.get('Pace Per Mile', {}).get('number')
     
     type_prop = existing_props.get('Type', {})
     ex_type = type_prop.get('select', {}).get('name') if type_prop.get('select') else None
@@ -132,19 +128,18 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
     return (
         ex_dist != round(distance_miles, 2) or
         ex_time != round(time_moving_mins, 2) or
-        ex_pace != round(pace_per_mile, 2) or
         ex_type != activity_type
     )
 
 def create_activity(notion_client: NotionClient, database_id: str, activity: dict) -> None:
-    activity_date = activity.get('startTimeLocal') # Map local time to Notion date block
+    activity_date = parse_local_date(activity)
     activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
     activity_type, activity_subtype = format_activity_type(
         activity.get('activityType', {}).get('typeKey', 'Unknown'),
         activity_name
     )
 
-    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(activity)
+    distance_miles, time_moving_mins = calculate_metrics(activity)
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {
@@ -152,8 +147,7 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
         "Type": {"select": {"name": activity_type}},
         "Name": {"title": [{"text": {"content": activity_name}}]},
         "Distance in Miles": {"number": round(distance_miles, 2)},
-        "Time Moving": {"number": round(time_moving_mins, 2)},
-        "Pace Per Mile": {"number": round(pace_per_mile, 2)}
+        "Time Moving": {"number": round(time_moving_mins, 2)}
     }
 
     page = {
@@ -173,15 +167,14 @@ def update_activity(notion_client: NotionClient, existing_activity: dict, new_ac
         activity_name
     )
 
-    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(new_activity)
+    distance_miles, time_moving_mins = calculate_metrics(new_activity)
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {
         "Type": {"select": {"name": activity_type}},
         "Name": {"title": [{"text": {"content": activity_name}}]},
         "Distance in Miles": {"number": round(distance_miles, 2)},
-        "Time Moving": {"number": round(time_moving_mins, 2)},
-        "Pace Per Mile": {"number": round(pace_per_mile, 2)}
+        "Time Moving": {"number": round(time_moving_mins, 2)}
     }
 
     update = {
@@ -205,12 +198,8 @@ def main():
     activities = get_all_activities(garmin_client, garmin_configuration.activity_fetch_limit)
 
     for activity in activities:
-        activity_date_raw: str = activity.get('startTimeLocal') # Evaluate based on local timestamp
-        activity_date: datetime = (
-            datetime
-            .strptime(activity_date_raw, '%Y-%m-%d %H:%M:%S')
-            .replace(tzinfo=local_tz)
-        )
+        activity_date_str = parse_local_date(activity)
+        activity_date: datetime = datetime.fromisoformat(activity_date_str)
 
         activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
         activity_type, activity_subtype = format_activity_type(

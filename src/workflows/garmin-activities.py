@@ -70,11 +70,28 @@ def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[s
 def format_entertainment(activity_name: str) -> str:
     return activity_name.replace('ENTERTAINMENT', 'Netflix')
 
-def calculate_metrics(activity: dict) -> tuple[float, float]:
+def calculate_metrics(activity: dict) -> tuple[float, float, float]:
     distance_miles = (activity.get('distance') or 0) / 1609.34
     duration = activity.get('movingDuration') or activity.get('duration') or 0
     time_moving_mins = duration / 60
-    return distance_miles, time_moving_mins
+    
+    average_speed = activity.get('averageSpeed')
+    
+    if average_speed:
+        decimal_pace = 1609.34 / (average_speed * 60)
+    elif distance_miles > 0:
+        decimal_pace = time_moving_mins / distance_miles
+    else:
+        decimal_pace = 0
+        
+    if decimal_pace > 0:
+        pace_minutes = int(decimal_pace)
+        pace_seconds = (decimal_pace - pace_minutes) * 60
+        pace_per_mile = pace_minutes + (pace_seconds / 100)
+    else:
+        pace_per_mile = 0
+        
+    return distance_miles, time_moving_mins, pace_per_mile
 
 def parse_local_date(activity: dict) -> str:
     local_str = activity.get('startTimeLocal')
@@ -117,10 +134,11 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
         activity_name
     )
 
-    distance_miles, time_moving_mins = calculate_metrics(new_activity)
+    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(new_activity)
 
     ex_dist = existing_props.get('Distance in Miles', {}).get('number')
     ex_time = existing_props.get('Time Moving', {}).get('number')
+    ex_pace = existing_props.get('Pace Per Mile', {}).get('number')
     
     type_prop = existing_props.get('Type', {})
     ex_type = type_prop.get('select', {}).get('name') if type_prop.get('select') else None
@@ -128,6 +146,7 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
     return (
         ex_dist != round(distance_miles, 2) or
         ex_time != round(time_moving_mins, 2) or
+        ex_pace != round(pace_per_mile, 2) or
         ex_type != activity_type
     )
 
@@ -139,7 +158,7 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
         activity_name
     )
 
-    distance_miles, time_moving_mins = calculate_metrics(activity)
+    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(activity)
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {
@@ -147,7 +166,8 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
         "Type": {"select": {"name": activity_type}},
         "Name": {"title": [{"text": {"content": activity_name}}]},
         "Distance in Miles": {"number": round(distance_miles, 2)},
-        "Time Moving": {"number": round(time_moving_mins, 2)}
+        "Time Moving": {"number": round(time_moving_mins, 2)},
+        "Pace Per Mile": {"number": round(pace_per_mile, 2)}
     }
 
     page = {
@@ -167,14 +187,15 @@ def update_activity(notion_client: NotionClient, existing_activity: dict, new_ac
         activity_name
     )
 
-    distance_miles, time_moving_mins = calculate_metrics(new_activity)
+    distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(new_activity)
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {
         "Type": {"select": {"name": activity_type}},
         "Name": {"title": [{"text": {"content": activity_name}}]},
         "Distance in Miles": {"number": round(distance_miles, 2)},
-        "Time Moving": {"number": round(time_moving_mins, 2)}
+        "Time Moving": {"number": round(time_moving_mins, 2)},
+        "Pace Per Mile": {"number": round(pace_per_mile, 2)}
     }
 
     update = {

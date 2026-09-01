@@ -77,8 +77,6 @@ def calculate_metrics(activity: dict) -> tuple[float, float, float]:
     time_moving_mins = duration_sec / 60
     
     if distance_miles > 0:
-        # Calculate total seconds per mile and round to the nearest whole integer
-        # This completely prevents rounding errors like 8.596 becoming 8.60
         seconds_per_mile = int(round(duration_sec / distance_miles))
         pace_minutes = seconds_per_mile // 60
         pace_seconds = seconds_per_mile % 60
@@ -195,13 +193,17 @@ def create_activity(notion_client: NotionClient, garmin_client: GarminClient, da
                 splits_db = notion_client.databases.create(**db_schema)
                 splits_db_id = splits_db['id']
                 
+                # Pre-process laps to keep track of the correct mile number while filtering out junk
+                valid_laps = []
                 lap_num = 1
                 for lap in laps:
                     lap_dist_mi = lap.get('distance', 0) / 1609.34
-                    
-                    if lap_dist_mi < 0.05:
-                        continue
-
+                    if lap_dist_mi >= 0.05:
+                        valid_laps.append((lap_num, lap, lap_dist_mi))
+                    lap_num += 1
+                
+                # Reverse the list so Mile 1 is created last (pushing it to the top of the Notion view)
+                for lap_number, lap, lap_dist_mi in reversed(valid_laps):
                     lap_time_sec = lap.get('duration', 0)
                     
                     if lap_dist_mi > 0:
@@ -215,12 +217,11 @@ def create_activity(notion_client: NotionClient, garmin_client: GarminClient, da
                     lap_row = {
                         "parent": {"database_id": splits_db_id},
                         "properties": {
-                            "Mile": {"title": [{"text": {"content": f"Mile {lap_num}"}}]},
+                            "Mile": {"title": [{"text": {"content": f"Mile {lap_number}"}}]},
                             "Pace Per Mile": {"number": round(pace_decimal, 2)}
                         }
                     }
                     notion_client.pages.create(**lap_row)
-                    lap_num += 1
         except Exception:
             pass
 

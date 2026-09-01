@@ -72,14 +72,13 @@ def format_entertainment(activity_name: str) -> str:
 
 def calculate_metrics(activity: dict) -> tuple[float, float, float]:
     distance_miles = (activity.get('distance') or 0) / 1609.34
-    duration = activity.get('movingDuration') or activity.get('duration') or 0
-    time_moving_mins = duration / 60
     
-    average_speed = activity.get('averageSpeed')
+    # Use total duration instead of moving duration to match Garmin dashboard
+    duration = activity.get('duration') or 0
+    time_moving_mins = duration / 60 
     
-    if average_speed:
-        decimal_pace = 1609.34 / (average_speed * 60)
-    elif distance_miles > 0:
+    # Calculate pace directly from total time and distance
+    if distance_miles > 0:
         decimal_pace = time_moving_mins / distance_miles
     else:
         decimal_pace = 0

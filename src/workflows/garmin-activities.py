@@ -73,11 +73,10 @@ def format_entertainment(activity_name: str) -> str:
 def calculate_metrics(activity: dict) -> tuple[float, float, float]:
     distance_miles = (activity.get('distance') or 0) / 1609.34
     
-    # Use total duration instead of moving duration to match Garmin dashboard
+    # Using raw elapsed duration to perfectly match Garmin's dashboard average pace
     duration = activity.get('duration') or 0
-    time_moving_mins = duration / 60 
+    time_moving_mins = duration / 60
     
-    # Calculate pace directly from total time and distance
     if distance_miles > 0:
         decimal_pace = time_moving_mins / distance_miles
     else:
@@ -149,13 +148,14 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
         ex_type != activity_type
     )
 
-def create_activity(notion_client: NotionClient, database_id: str, activity: dict) -> None:
+def create_activity(notion_client: NotionClient, garmin_client: GarminClient, database_id: str, activity: dict) -> None:
     activity_date = parse_local_date(activity)
     activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
     activity_type, activity_subtype = format_activity_type(
         activity.get('activityType', {}).get('typeKey', 'Unknown'),
         activity_name
     )
+    activity_id = activity.get('activityId')
 
     distance_miles, time_moving_mins, pace_per_mile = calculate_metrics(activity)
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
@@ -176,6 +176,50 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
 
     if icon_url:
         page["icon"] = {"type": "external", "external": {"url": icon_url}}
+
+    # Pull and construct mile splits for inside the page
+    splits_blocks = []
+    if activity_type == "Run" and activity_id:
+        try:
+            splits_data = garmin_client.get_activity_splits(activity_id)
+            laps = splits_data.get('lapDTOs', []) if isinstance(splits_data, dict) else splits_data
+            
+            if laps:
+                splits_blocks.append({
+                    "object": "block",
+                    "type": "heading_3",
+                    "heading_3": {
+                        "rich_text": [{"type": "text", "text": {"content": "Mile Splits"}}]
+                    }
+                })
+                
+                lap_num = 1
+                for lap in laps:
+                    lap_dist_mi = lap.get('distance', 0) / 1609.34
+                    lap_time_min = lap.get('duration', 0) / 60
+                    
+                    if lap_dist_mi > 0:
+                        lap_pace = lap_time_min / lap_dist_mi
+                        pace_min = int(lap_pace)
+                        pace_sec = int((lap_pace - pace_min) * 60)
+                        pace_str = f"{pace_min}:{pace_sec:02d}"
+                    else:
+                        pace_str = "0:00"
+                        
+                    text_content = f"Lap {lap_num} ({lap_dist_mi:.2f} mi): {pace_str}/mi"
+                    
+                    splits_blocks.append({
+                        "object": "block",
+                        "type": "bulleted_list_item",
+                        "bulleted_list_item": {
+                            "rich_text": [{"type": "text", "text": {"content": text_content}}]
+                        }
+                    })
+                    lap_num += 1
+                    
+                page["children"] = splits_blocks
+        except Exception:
+            pass  # If Garmin fails to provide splits, continue creating the standard entry
 
     notion_client.pages.create(**page)
 
@@ -233,7 +277,7 @@ def main():
             if activity_needs_update(existing_activity, activity):
                 update_activity(notion_client, existing_activity, activity)
         else:
-            create_activity(notion_client, database_id, activity)
+            create_activity(notion_client, garmin_client, database_id, activity)
 
 if __name__ == '__main__':
     main()
